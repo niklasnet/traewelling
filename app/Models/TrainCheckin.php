@@ -2,12 +2,14 @@
 
 namespace App\Models;
 
+use App\Casts\UTCDateTime;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Log;
 
@@ -27,24 +29,24 @@ class TrainCheckin extends Model
 
     protected $fillable = [
         'status_id', 'user_id', 'trip_id', 'origin', 'destination',
-        'distance', 'duration', 'departure', 'real_departure', 'arrival', 'real_arrival', 'points', 'forced',
+        'distance', 'duration', 'departure', 'manual_departure', 'arrival', 'manual_arrival', 'points', 'forced',
     ];
     protected $hidden   = ['created_at', 'updated_at'];
     protected $appends  = ['origin_stopover', 'destination_stopover', 'speed'];
     protected $casts    = [
-        'id'             => 'integer',
-        'status_id'      => 'integer',
-        'user_id'        => 'integer',
-        'origin'         => 'integer',
-        'destination'    => 'integer',
-        'distance'       => 'integer',
-        'duration'       => 'integer',
-        'departure'      => 'datetime',
-        'real_departure' => 'datetime',
-        'arrival'        => 'datetime',
-        'real_arrival'   => 'datetime',
-        'points'         => 'integer',
-        'forced'         => 'boolean',
+        'id'               => 'integer',
+        'status_id'        => 'integer',
+        'user_id'          => 'integer',
+        'origin'           => 'integer',
+        'destination'      => 'integer',
+        'distance'         => 'integer',
+        'duration'         => 'integer',
+        'departure'        => UTCDateTime::class,
+        'manual_departure' => UTCDateTime::class,
+        'arrival'          => UTCDateTime::class,
+        'manual_arrival'   => UTCDateTime::class,
+        'points'           => 'integer',
+        'forced'           => 'boolean',
     ];
 
     public function status(): BelongsTo {
@@ -122,10 +124,10 @@ class TrainCheckin extends Model
         }
 
         //Else calculate and cache it
-        $departure = $this->real_departure ?? $this->origin_stopover->departure ?? $this->departure;
-        $arrival   = $this->real_arrival ?? $this->destination_stopover?->arrival ?? $this->arrival;
+        $departure = $this->manual_departure ?? $this->origin_stopover->departure ?? $this->departure;
+        $arrival   = $this->manual_arrival ?? $this->destination_stopover->arrival ?? $this->arrival;
         $duration  = $arrival->diffInMinutes($departure);
-        $this->update(['duration' => $duration]);
+        DB::table('train_checkins')->where('id', $this->id)->update(['duration' => $duration]);
         return $duration;
     }
 

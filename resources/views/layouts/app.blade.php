@@ -283,13 +283,11 @@
              * checkin into components/stationboard.js.
              */
             var token            = '{{ csrf_token() }}';
-            var urlDisconnect    = '{{ route('provider.destroy') }}';
             var urlFollow        = '{{ route('follow.create') }}';
             var urlFollowRequest = '{{ route('follow.request') }}';
             var urlTrainTrip     = '{{ route('trains.trip') }}';
             var urlUnfollow      = '{{ route('follow.destroy') }}';
             var urlAutocomplete  = '{{ url('transport/train/autocomplete') }}';
-
             var mapprovider = '{{ Auth::user()->mapprovider ?? "default" }}';
 
             let translations = {

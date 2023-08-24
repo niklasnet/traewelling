@@ -13,7 +13,7 @@ use App\Exceptions\CheckInCollisionException;
 use App\Exceptions\DistanceDeviationException;
 use App\Exceptions\HafasException;
 use App\Exceptions\StationNotOnTripException;
-use App\Http\Controllers\Backend\GeoController;
+use App\Http\Controllers\Backend\Support\LocationController;
 use App\Http\Controllers\Controller;
 use App\Http\Controllers\HafasController;
 use App\Http\Controllers\StatusController as StatusBackend;
@@ -136,10 +136,10 @@ abstract class TrainCheckinController extends Controller
 
         //Note: Compare with ->format because of timezone differences!
         $firstStop = $trip->stopovers->where('train_station_id', $origin->id)
-                                     ->where('departure_planned', $departure->format('Y-m-d H:i:s'))
+                                     ->where('departure_planned', $departure)
                                      ->first();
         $lastStop  = $trip->stopovers->where('train_station_id', $destination->id)
-                                     ->where('arrival_planned', $arrival->format('Y-m-d H:i:s'))
+                                     ->where('arrival_planned', $arrival)
                                      ->first();
 
         if (empty($firstStop) || empty($lastStop)) {
@@ -158,7 +158,7 @@ abstract class TrainCheckinController extends Controller
             throw new CheckInCollisionException($overlapping->first());
         }
 
-        $distance = GeoController::calculateDistance(hafasTrip: $trip, origin: $firstStop, destination: $lastStop);
+        $distance = (new LocationController($trip, $firstStop, $lastStop))->calculateDistance();
 
         $pointCalculation = PointsCalculationController::calculatePoints(
             distanceInMeter: $distance,
@@ -200,7 +200,10 @@ abstract class TrainCheckinController extends Controller
         }
     }
 
-    public static function changeDestination(TrainCheckin $checkin, TrainStopover $newDestinationStopover): PointReason {
+    public static function changeDestination(
+        TrainCheckin $checkin,
+        TrainStopover $newDestinationStopover
+    ): PointReason {
         if ($newDestinationStopover->arrival_planned->isBefore($checkin->origin_stopover->arrival_planned)
             || $newDestinationStopover->is($checkin->origin_stopover)
             || !$checkin->HafasTrip->stopovers->contains('id', $newDestinationStopover->id)
@@ -208,11 +211,8 @@ abstract class TrainCheckinController extends Controller
             throw new InvalidArgumentException();
         }
 
-        $newDistance = GeoController::calculateDistance(
-            hafasTrip:   $checkin->HafasTrip,
-            origin:      $checkin->origin_stopover,
-            destination: $newDestinationStopover,
-        );
+        $newDistance = (new LocationController($checkin->HafasTrip, $checkin->origin_stopover, $newDestinationStopover))
+        ->calculateDistance();
 
         $pointsResource = PointsCalculationController::calculatePoints(
             distanceInMeter: $newDistance,
@@ -222,7 +222,7 @@ abstract class TrainCheckinController extends Controller
         );
 
         $checkin->update([
-                             'arrival'     => $newDestinationStopover->arrival_planned->toIso8601String(),
+                             'arrival'     => $newDestinationStopover->arrival_planned,
                              'destination' => $newDestinationStopover->trainStation->ibnr,
                              'distance'    => $newDistance,
                              'points'      => $pointsResource->points,
@@ -272,19 +272,21 @@ abstract class TrainCheckinController extends Controller
         }
         $firstStop   = $trainCheckin->origin_stopover;
         $lastStop    = $trainCheckin->destination_stopover;
-        $distance    = GeoController::calculateDistance(
+        $distance    = (new LocationController(
             hafasTrip:   $trainCheckin->HafasTrip,
             origin:      $firstStop,
             destination: $lastStop
-        );
+        ))->calculateDistance();
         $oldPoints   = $trainCheckin->points;
         $oldDistance = $trainCheckin->distance;
 
-        if ($trainCheckin->distance === 0 || $distance / $trainCheckin->distance >= 1.15) {
-            Log::error(sprintf('Distance deviation for status #%d is greater than 15 percent. Original: %d, new: %d',
-                               $status->id,
-                               $oldDistance,
-                               $distance));
+        if ($distance === 0 || $oldDistance !== 0 && $distance / $oldDistance >= 1.15) {
+            Log::error(sprintf(
+                           'Distance deviation for status #%d is greater than 15 percent. Original: %d, new: %d',
+                           $status->id,
+                           $oldDistance,
+                           $distance
+                       ));
             throw new DistanceDeviationException();
         }
 

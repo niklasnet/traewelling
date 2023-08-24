@@ -11,6 +11,7 @@ use App\Http\Controllers\Backend\Transport\TrainCheckinController;
 use App\Http\Controllers\Controller;
 use App\Models\Status;
 use App\Models\TrainStopover;
+use Carbon\Carbon;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Http\JsonResponse;
@@ -25,8 +26,8 @@ class StatusController extends Controller
         $validated = $request->validate([
                                             'statusId'              => ['required', 'exists:statuses,id'],
                                             'body'                  => ['nullable', 'max:280'],
-                                            'realDeparture'         => ['nullable', 'date'],
-                                            'realArrival'           => ['nullable', 'date'],
+                                            'manualDeparture'       => ['nullable', 'date'],
+                                            'manualArrival'         => ['nullable', 'date'],
                                             'business_check'        => ['required', new Enum(Business::class)], //TODO: Why is this not CamelCase?
                                             'checkinVisibility'     => ['required', new Enum(StatusVisibility::class)],
                                             'destinationStopoverId' => ['nullable', 'exists:train_stopovers,id'],
@@ -42,8 +43,12 @@ class StatusController extends Controller
                             ]);
 
             $status->trainCheckin->update([
-                                              'real_departure' => $validated['realDeparture'] ?? null,
-                                              'real_arrival'   => $validated['realArrival'] ?? null,
+                                              'manual_departure' => isset($validated['manualDeparture']) ?
+                                                  Carbon::parse($validated['manualDeparture'], auth()->user()->timezone) :
+                                                  null,
+                                              'manual_arrival'   => isset($validated['manualArrival']) ?
+                                                  Carbon::parse($validated['manualArrival'], auth()->user()->timezone) :
+                                                  null,
                                           ]);
 
             StatusUpdateEvent::dispatch($status->refresh());
@@ -70,11 +75,11 @@ class StatusController extends Controller
                     reason:               'status-updated'
                 );
 
-                return redirect()->route('statuses.get', ['id' => $status->id])
+                return redirect()->route('status', ['id' => $status->id])
                                  ->with('checkin-success', (clone $checkinSuccess));
             }
 
-            return redirect()->route('statuses.get', ['id' => $status->id])
+            return redirect()->route('status', ['id' => $status->id])
                              ->with('success', __('status.update.success'));
         } catch (ModelNotFoundException|PermissionException) {
             return redirect()->back()->with('alert-danger', __('messages.exception.general'));

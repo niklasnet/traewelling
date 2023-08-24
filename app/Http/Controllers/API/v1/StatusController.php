@@ -3,10 +3,12 @@
 
 namespace App\Http\Controllers\API\v1;
 
+use App\Dto\GeoJson\Feature;
+use App\Dto\GeoJson\FeatureCollection;
 use App\Enum\Business;
 use App\Enum\StatusVisibility;
 use App\Exceptions\PermissionException;
-use App\Http\Controllers\Backend\GeoController;
+use App\Http\Controllers\Backend\Support\LocationController;
 use App\Http\Controllers\Backend\Transport\TrainCheckinController;
 use App\Http\Controllers\Backend\User\DashboardController;
 use App\Http\Controllers\StatusController as StatusBackend;
@@ -21,12 +23,15 @@ use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
+use Illuminate\Http\Resources\Json\JsonResource;
 use Illuminate\Http\Response;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rules\Enum;
 use Illuminate\Validation\ValidationException;
 use InvalidArgumentException;
+use OpenApi\Annotations as OA;
 
 class StatusController extends Controller
 {
@@ -175,7 +180,78 @@ class StatusController extends Controller
      *
      */
     public function enRoute(): AnonymousResourceCollection {
-        return StatusResource::collection(StatusBackend::getActiveStatuses()['statuses']);
+        return StatusResource::collection(StatusBackend::getActiveStatuses());
+    }
+
+    /**
+     * @OA\Get(
+     *     path="/positions",
+     *     operationId="getLivePositionsForActiveStatuses",
+     *     tags={"Status"},
+     *     summary="[Auth optional] get live positions for active statuses",
+     *     description="Returns an array of live position objects for active statuses",
+     *     @OA\Response(
+     *         response="200",
+     *         description="successful operation",
+     *         @OA\JsonContent(
+     *             @OA\Property(
+     *                 property="data",
+     *                 type="array",
+     *                 @OA\Items(
+     *                     ref="#/components/schemas/LivePointDto"
+     *                 )
+     *             )
+     *         )
+     *     ),
+     *     @OA\Response(response=403, description="User not authorized to access this status"),
+     *       security={
+     *           {"passport": {"read-statuses"}}, {"token": {}}
+     *
+     *       }
+     *     )
+     * )
+     */
+    public function livePositions(): JsonResource {
+        return JsonResource::collection(StatusBackend::getLivePositions());
+    }
+
+    /**
+     * @OA\Get(
+     *     path="/positions/{ids}",
+     *     operationId="getLivePositionsForStatuses",
+     *     tags={"Status"},
+     *     summary="[Auth optional] get live positions for given statuses",
+     *     description="Returns an array of live position objects for given status IDs",
+     *     @OA\Parameter(
+     *         name="ids",
+     *         in="path",
+     *         description="Status-IDs separated by comma",
+     *         example="1337,1338",
+     *         @OA\Schema(type="string")
+     *     ),
+     *     @OA\Response(
+     *         response="200",
+     *         description="successful operation",
+     *         @OA\JsonContent(
+     *             @OA\Property(
+     *                 property="data",
+     *                 type="array",
+     *                 @OA\Items(
+     *                     ref="#/components/schemas/LivePointDto"
+     *                 )
+     *             )
+     *         )
+     *     ),
+     *     @OA\Response(response=403, description="User not authorized to access this status"),
+     *       security={
+     *           {"passport": {"read-statuses"}}, {"token": {}}
+     *
+     *       }
+     *     )
+     * )
+     */
+    public function getLivePositionForStatus($ids): AnonymousResourceCollection {
+        return JsonResource::collection(StatusBackend::getLivePositionForStatus($ids));
     }
 
     /**
@@ -322,8 +398,10 @@ class StatusController extends Controller
             'visibility'                => ['required', new Enum(StatusVisibility::class)],
 
             //Changing of TrainCheckin-Metadata
-            'realDeparture'             => ['nullable', 'date'],
-            'realArrival'               => ['nullable', 'date'],
+            'realDeparture'             => ['nullable', 'date'], //TODO: deprecated: remove after 2023-10 (#1809)
+            'manualDeparture'           => ['nullable', 'date'],
+            'realArrival'               => ['nullable', 'date'], //TODO: deprecated: remove after 2023-10 (#1809)
+            'manualArrival'             => ['nullable', 'date'],
 
             //Following attributes are needed, if user want's to change the destination
             'destinationId'             => ['required_with:destinationArrivalPlanned', 'exists:train_stations,id'],
@@ -339,9 +417,11 @@ class StatusController extends Controller
             $status = Status::findOrFail($statusId);
             $this->authorize('update', $status);
 
-            if (isset($validated['destinationId'], $validated['destinationArrivalPlanned'])) {
+            if (isset($validated['destinationId'], $validated['destinationArrivalPlanned'])
+                && ((int) $validated['destinationId']) !== $status->trainCheckin->destinationStation->id) {
+                $arrival  = Carbon::parse($validated['destinationArrivalPlanned'])->timezone(config('app.timezone'));
                 $stopover = TrainStopover::where('train_station_id', $validated['destinationId'])
-                                         ->where('arrival_planned', $validated['destinationArrivalPlanned'])
+                                         ->where('arrival_planned', $arrival)
                                          ->first();
 
                 if ($stopover === null) {
@@ -360,11 +440,15 @@ class StatusController extends Controller
                                 'visibility' => StatusVisibility::from($validated['visibility']),
                             ]);
 
-            if (isset($validated['realDeparture'])) {
-                $status->trainCheckin->update(['real_departure' => $validated['realDeparture']]);
+            if (isset($validated['realDeparture']) || isset($validated['manualDeparture'])) { //TODO: remove realDeparture after 2023-10 (#1809)
+                $status->trainCheckin->update([
+                                                  'manual_departure' => Carbon::parse($validated['manualDeparture'] ?? $validated['realDeparture'], auth()->user()->timezone)
+                                              ]);
             }
-            if (isset($validated['realArrival'])) {
-                $status->trainCheckin->update(['real_arrival' => $validated['realArrival']]);
+            if (isset($validated['realArrival']) || isset($validated['manualArrival'])) { //TODO: remove realArrival after 2023-10 (#1809)
+                $status->trainCheckin->update([
+                                                  'manual_arrival' => Carbon::parse($validated['manualArrival'] ?? $validated['realArrival'], auth()->user()->timezone)
+                                              ]);
             }
 
             return $this->sendResponse(new StatusResource($status->fresh()));
@@ -423,11 +507,11 @@ class StatusController extends Controller
      *
      * @param string $parameters
      *
-     * @return JsonResponse
+     * @return JsonResource
      * @todo extract this to backend
      * @todo does this conform to the private checkin-shit?
      */
-    public function getPolyline(string $parameters): JsonResponse {
+    public function getPolyline(string $parameters): JsonResource {
         $ids             = explode(',', $parameters, 50);
         $geoJsonFeatures = Status::whereIn('id', $ids)
                                  ->with('trainCheckin.HafasTrip.polyline')
@@ -441,22 +525,12 @@ class StatusController extends Controller
                                      return true;
                                  })
                                  ->map(function($status) {
-                                     return [
-                                         'type'       => 'Feature',
-                                         'geometry'   => [
-                                             'type'        => 'LineString',
-                                             'coordinates' => GeoController::getMapLinesForCheckin($status->trainCheckin)
-                                         ],
-                                         'properties' => [
-                                             'statusId' => $status->id
-                                         ]
-                                     ];
+                                     return new Feature(
+                                         LocationController::forStatus($status)->getMapLines()
+                                     );
                                  });
-        $geoJson         = [
-            'type'     => 'FeatureCollection',
-            'features' => $geoJsonFeatures
-        ];
-        return $ids ? $this->sendResponse($geoJson) : $this->sendError("");
+        $geoJson         = new FeatureCollection($geoJsonFeatures);
+        return $ids ? new JsonResource($geoJson) : $this->sendError("");
     }
 
     /**

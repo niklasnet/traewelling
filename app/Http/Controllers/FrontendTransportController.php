@@ -50,7 +50,9 @@ class FrontendTransportController extends Controller
                                             'travelType' => ['nullable', new Enum(TravelType::class)]
                                         ]);
 
-        $when = isset($validated['when']) ? Carbon::parse($validated['when']) : null;
+        $when = isset($validated['when'])
+            ? Carbon::parse($validated['when'], auth()->user()->timezone ?? config('app.timezone'))
+            : null;
 
         try {
             //Per default: Use the given station query for lookup
@@ -119,14 +121,7 @@ class FrontendTransportController extends Controller
 
         try {
             $startStation = TrainStation::where('ibnr', $validated['start'])->firstOrFail();
-
-            // If we get a string with a timezone, remove it, so we can parse it "correctly"
-            // This needs to be removed once we can handle UTC and timezones.
-            if (str_contains(substr($validated['departure'], -6), '+')) {
-                $departure = Carbon::parse(substr($validated['departure'], 0, -6));
-            } else {
-                $departure = Carbon::parse($validated['departure']);
-            }
+            $departure    = Carbon::parse($validated['departure']);
 
             $hafasTrip = TrainCheckinController::getHafasTrip(
                 $validated['tripID'],
@@ -208,7 +203,8 @@ class FrontendTransportController extends Controller
                 event:                $trainCheckin->event,
                 forced: isset($validated['force'])
             );
-            return redirect()->route('dashboard')->with('checkin-success', (clone $checkinSuccess));
+            return redirect()->route('status', ['id' => $backendResponse['status']->id])
+                             ->with('checkin-success', (clone $checkinSuccess));
 
         } catch (CheckInCollisionException $exception) {
             return redirect()
